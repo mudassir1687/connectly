@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connectly</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0d0d12;color:#f7f7fb;font:16px Arial,sans-serif}
+header{padding:18px;background:#171720;border-bottom:1px solid #30303d;font-size:25px;font-weight:bold;color:#c4a1ff}
+main{max-width:650px;margin:auto;padding:16px}section,.post{background:#191922;border:1px solid #30303d;padding:16px;border-radius:14px;margin-bottom:16px}
+input,textarea,button{width:100%;padding:12px;margin:6px 0;border-radius:9px;border:1px solid #393947;background:#101017;color:white;font-size:15px}
+button{background:#8b5cf6;border:0;font-weight:bold;cursor:pointer}.secondary{background:#30303d}.muted{color:#aaaabd;font-size:13px}.hidden{display:none!important}.row{display:flex;gap:8px}.row button{flex:1}.post p{white-space:pre-wrap;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<header>✦ Connectly</header>
+<main>
+<section><strong>Connectly test version</strong><p class="muted">Firebase configuration is filled in. Before inviting real users, configure secure Firestore rules and test login, posting, likes, comments and chat.</p></section>
+<p id="status">Welcome to Connectly. Sign in or create an account.</p>
+<section id="auth">
+<h3>Join Connectly</h3>
+<button id="googleLogin">🔵 Continue with Google</button>
+<p class="muted">Or use email and password</p>
+<input id="email" type="email" placeholder="Email address" autocomplete="email">
+<input id="password" type="password" placeholder="Password (6+ characters)" autocomplete="current-password">
+<div class="row"><button id="signup">Sign up</button><button id="login" class="secondary">Log in</button></div>
+</section>
+<section id="profile" class="hidden">
+<h3>Your profile</h3>
+<p class="muted">Username must be unique: 3–20 letters, numbers or underscores.</p>
+<input id="username" placeholder="e.g. mudassir_07" maxlength="20">
+<input id="displayName" placeholder="Display name (optional)" maxlength="40">
+<button id="saveProfile">Save username</button>
+<button id="logout" class="secondary">Log out</button>
+</section>
+<section id="searchBox" class="hidden"><h3>Find people</h3><input id="search" placeholder="Search exact username"><button id="searchBtn">Search</button><div id="searchResults"></div></section>
+<section id="chatBox" class="hidden">
+<h3>Private messages</h3>
+<p class="muted">Search a username above, then enter it here to open a conversation. Both users must have Connectly accounts.</p>
+<input id="chatUsername" placeholder="Chat with username (without @)">
+<button id="openChat">Open conversation</button>
+<div id="chatWith" class="muted">No conversation selected.</div>
+<div id="messages" style="max-height:300px;overflow:auto"></div>
+<input id="messageText" placeholder="Write a message…" maxlength="2000">
+<button id="sendMessage">Send message</button>
+</section>
+<section id="composer" class="hidden"><h3>Create a post</h3><textarea id="postText" placeholder="What's on your mind?" maxlength="2000"></textarea><button id="publish">Publish post</button></section>
+<section id="feedBox" class="hidden"><h3>Latest posts</h3><div id="feed">Loading posts…</div></section>
+</main>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js">
+// Basic 1-to-1 chat. Messages are stored in Firestore.
+let activeChatId = null, activeChatUser = null, messagesUnsubscribe = null;
+function chatIdFor(a, b) { return [a, b].sort().join("_"); }
+
+$("openChat").onclick = async () => {
+  if (!currentUser || !profile?.username) { say("Save your username before chatting."); return; }
+  const targetName = cleanUsername($("chatUsername").value);
+  if (!validUsername(targetName)) { say("Enter a valid username."); return; }
+  try {
+    const reservation = await db.collection("usernames").doc(targetName).get();
+    if (!reservation.exists) { say("No user found with @" + targetName); return; }
+    const targetUid = reservation.data().uid;
+    if (targetUid === currentUser.uid) { say("You cannot chat with yourself."); return; }
+    const targetDoc = await db.collection("users").doc(targetUid).get();
+    if (!targetDoc.exists) { say("This profile is unavailable."); return; }
+    activeChatUser = { uid: targetUid, username: targetName };
+    activeChatId = chatIdFor(currentUser.uid, targetUid);
+    $("chatWith").textContent = "Chatting with @" + targetName;
+    if (messagesUnsubscribe) messagesUnsubscribe();
+    messagesUnsubscribe = db.collection("chats").doc(activeChatId)
+      .collection("messages").orderBy("createdAt", "asc").limit(100)
+      .onSnapshot(snapshot => {
+        const list = $("messages"); list.replaceChildren();
+        snapshot.forEach(doc => {
+          const m = doc.data(), line = document.createElement("p");
+          line.textContent = (m.senderUid === currentUser.uid ? "You" : "@" + targetName) + ": " + m.text;
+          line.style.padding = "8px";
+          line.style.borderBottom = "1px solid #30303d";
+          list.appendChild(line);
+        });
+        list.scrollTop = list.scrollHeight;
+      }, e => say("Chat error: " + e.message));
+    say("Conversation opened.");
+  } catch(e) { say("Could not open chat: " + e.message); }
+};
+
+$("sendMessage").onclick = async () => {
+  if (!currentUser || !activeChatId || !activeChatUser) {
+    say("Open a conversation first."); return;
+  }
+  const text = $("messageText").value.trim();
+  if (!text) return;
+  try {
+    const chatRef = db.collection("chats").doc(activeChatId);
+    await chatRef.set({
+      members: [currentUser.uid, activeChatUser.uid].sort(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await chatRef.collection("messages").add({
+      senderUid: currentUser.uid,
+      text: text.slice(0, 2000),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    $("messageText").value = "";
+  } catch(e) { say("Message could not be sent: " + e.message); }
+};
+
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js">
+// Basic 1-to-1 chat. Messages are stored in Firestore.
+let activeChatId = null, activeChatUser = null, messagesUnsubscribe = null;
+function chatIdFor(a, b) { return [a, b].sort().join("_"); }
+
+$("openChat").onclick = async () => {
+  if (!currentUser || !profile?.username) { say("Save your username before chatting."); return; }
+  const targetName = cleanUsername($("chatUsername").value);
+  if (!validUsername(targetName)) { say("Enter a valid username."); return; }
+  try {
+    const reservation = await db.collection("usernames").doc(targetName).get();
+    if (!reservation.exists) { say("No user found with @" + targetName); return; }
+    const targetUid = reservation.data().uid;
+    if (targetUid === currentUser.uid) { say("You cannot chat with yourself."); return; }
+    const targetDoc = await db.collection("users").doc(targetUid).get();
+    if (!targetDoc.exists) { say("This profile is unavailable."); return; }
+    activeChatUser = { uid: targetUid, username: targetName };
+    activeChatId = chatIdFor(currentUser.uid, targetUid);
+    $("chatWith").textContent = "Chatting with @" + targetName;
+    if (messagesUnsubscribe) messagesUnsubscribe();
+    messagesUnsubscribe = db.collection("chats").doc(activeChatId)
+      .collection("messages").orderBy("createdAt", "asc").limit(100)
+      .onSnapshot(snapshot => {
+        const list = $("messages"); list.replaceChildren();
+        snapshot.forEach(doc => {
+          const m = doc.data(), line = document.createElement("p");
+          line.textContent = (m.senderUid === currentUser.uid ? "You" : "@" + targetName) + ": " + m.text;
+          line.style.padding = "8px";
+          line.style.borderBottom = "1px solid #30303d";
+          list.appendChild(line);
+        });
+        list.scrollTop = list.scrollHeight;
+      }, e => say("Chat error: " + e.message));
+    say("Conversation opened.");
+  } catch(e) { say("Could not open chat: " + e.message); }
+};
+
+$("sendMessage").onclick = async () => {
+  if (!currentUser || !activeChatId || !activeChatUser) {
+    say("Open a conversation first."); return;
+  }
+  const text = $("messageText").value.trim();
+  if (!text) return;
+  try {
+    const chatRef = db.collection("chats").doc(activeChatId);
+    await chatRef.set({
+      members: [currentUser.uid, activeChatUser.uid].sort(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await chatRef.collection("messages").add({
+      senderUid: currentUser.uid,
+      text: text.slice(0, 2000),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    $("messageText").value = "";
+  } catch(e) { say("Message could not be sent: " + e.message); }
+};
+
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js">
+// Basic 1-to-1 chat. Messages are stored in Firestore.
+let activeChatId = null, activeChatUser = null, messagesUnsubscribe = null;
+function chatIdFor(a, b) { return [a, b].sort().join("_"); }
+
+$("openChat").onclick = async () => {
+  if (!currentUser || !profile?.username) { say("Save your username before chatting."); return; }
+  const targetName = cleanUsername($("chatUsername").value);
+  if (!validUsername(targetName)) { say("Enter a valid username."); return; }
+  try {
+    const reservation = await db.collection("usernames").doc(targetName).get();
+    if (!reservation.exists) { say("No user found with @" + targetName); return; }
+    const targetUid = reservation.data().uid;
+    if (targetUid === currentUser.uid) { say("You cannot chat with yourself."); return; }
+    const targetDoc = await db.collection("users").doc(targetUid).get();
+    if (!targetDoc.exists) { say("This profile is unavailable."); return; }
+    activeChatUser = { uid: targetUid, username: targetName };
+    activeChatId = chatIdFor(currentUser.uid, targetUid);
+    $("chatWith").textContent = "Chatting with @" + targetName;
+    if (messagesUnsubscribe) messagesUnsubscribe();
+    messagesUnsubscribe = db.collection("chats").doc(activeChatId)
+      .collection("messages").orderBy("createdAt", "asc").limit(100)
+      .onSnapshot(snapshot => {
+        const list = $("messages"); list.replaceChildren();
+        snapshot.forEach(doc => {
+          const m = doc.data(), line = document.createElement("p");
+          line.textContent = (m.senderUid === currentUser.uid ? "You" : "@" + targetName) + ": " + m.text;
+          line.style.padding = "8px";
+          line.style.borderBottom = "1px solid #30303d";
+          list.appendChild(line);
+        });
+        list.scrollTop = list.scrollHeight;
+      }, e => say("Chat error: " + e.message));
+    say("Conversation opened.");
+  } catch(e) { say("Could not open chat: " + e.message); }
+};
+
+$("sendMessage").onclick = async () => {
+  if (!currentUser || !activeChatId || !activeChatUser) {
+    say("Open a conversation first."); return;
+  }
+  const text = $("messageText").value.trim();
+  if (!text) return;
+  try {
+    const chatRef = db.collection("chats").doc(activeChatId);
+    await chatRef.set({
+      members: [currentUser.uid, activeChatUser.uid].sort(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await chatRef.collection("messages").add({
+      senderUid: currentUser.uid,
+      text: text.slice(0, 2000),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    $("messageText").value = "";
+  } catch(e) { say("Message could not be sent: " + e.message); }
+};
+
+</script>
+<script>
+/* STEP 1: Replace these values with your Firebase project's Web App config. */
+const firebaseConfig = {
+  apiKey: "AIzaSyBMgdqEMqA6H29VnGz6IAkyyMYPwdYL2pc",
+  authDomain: "connectly-37c0e.firebaseapp.com",
+  projectId: "connectly-37c0e",
+  storageBucket: "connectly-37c0e.firebasestorage.app",
+  messagingSenderId: "1001935844056",
+  appId: "1:1001935844056:web:353ac1fb57b52001be1dad",
+  measurementId: "G-S1LVJX8KSV"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+const googleProvider = new firebase.auth.GoogleAuthProvider();
+const $ = id => document.getElementById(id);
+let currentUser = null, profile = null, feedUnsubscribe = null;
+const say = m => $("status").textContent = m;
+const show = (id, yes) => $(id).classList.toggle("hidden", !yes);
+const cleanUsername = s => s.trim().toLowerCase().replace(/^@/, "");
+const validUsername = s => /^[a-z0-9_]{3,20}$/.test(s);
+
+$("googleLogin").onclick = async () => {
+  try { await auth.signInWithRedirect(googleProvider); }
+  catch(e) { say("Google login error: " + e.message); }
+};
+auth.getRedirectResult().catch(e => say("Google login error: " + e.message));
+
+$("signup").onclick = async () => {
+  try { await auth.createUserWithEmailAndPassword($("email").value.trim(), $("password").value); say("Account created. Choose a username."); }
+  catch(e) { say(e.message); }
+};
+$("login").onclick = async () => {
+  try { await auth.signInWithEmailAndPassword($("email").value.trim(), $("password").value); }
+  catch(e) { say(e.message); }
+};
+$("logout").onclick = () => auth.signOut();
+
+auth.onAuthStateChanged(async user => {
+  currentUser = user;
+  if (feedUnsubscribe) { feedUnsubscribe(); feedUnsubscribe = null; }
+  profile = null;
+  show("auth", !user); show("profile", !!user); show("searchBox", !!user); show("chatBox", !!user);
+  show("composer", !!user); show("feedBox", !!user);
+  if (!user) { say("Log in or create an account to continue."); return; }
+  try {
+    const doc = await db.collection("users").doc(user.uid).get();
+    profile = doc.exists ? doc.data() : null;
+    $("username").value = profile?.username || "";
+    $("displayName").value = profile?.displayName || user.displayName || "";
+    say(profile?.username ? "Logged in as @" + profile.username : "Choose a unique username to finish your profile.");
+    loadFeed();
+  } catch(e) { say("Firebase setup error: " + e.message); }
+});
+
+$("saveProfile").onclick = async () => {
+  if (!currentUser) return;
+  const username = cleanUsername($("username").value);
+  const displayName = $("displayName").value.trim().slice(0,40);
+  if (!validUsername(username)) { say("Username must be 3–20 characters: a-z, 0-9 or underscore."); return; }
+  try {
+    await db.runTransaction(async tx => {
+      const userRef = db.collection("users").doc(currentUser.uid);
+      const userSnap = await tx.get(userRef);
+      const oldUsername = userSnap.exists ? userSnap.data().username : null;
+      if (oldUsername === username) {
+        tx.set(userRef, {displayName, updatedAt: firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
+        return;
+      }
+      const nameRef = db.collection("usernames").doc(username);
+      const nameSnap = await tx.get(nameRef);
+      if (nameSnap.exists && nameSnap.data().uid !== currentUser.uid) throw new Error("Username already taken. Try another.");
+      tx.set(nameRef, {uid:currentUser.uid});
+      tx.set(userRef, {username, displayName, createdAt: userSnap.exists && userSnap.data().createdAt ? userSnap.data().createdAt : firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
+      if (oldUsername) tx.delete(db.collection("usernames").doc(oldUsername));
+    });
+    const snap = await db.collection("users").doc(currentUser.uid).get();
+    profile = snap.data(); say("Username saved: @" + username);
+  } catch(e) { say(e.message); }
+};
+
+$("searchBtn").onclick = async () => {
+  const username = cleanUsername($("search").value);
+  if (!validUsername(username)) { $("searchResults").textContent = "Enter a valid username."; return; }
+  try {
+    const reserved = await db.collection("usernames").doc(username).get();
+    if (!reserved.exists) { $("searchResults").textContent = "No user found with @" + username; return; }
+    const userDoc = await db.collection("users").doc(reserved.data().uid).get();
+    if (!userDoc.exists) { $("searchResults").textContent = "Profile unavailable."; return; }
+    const u = userDoc.data();
+    $("searchResults").textContent = (u.displayName || u.username) + "  @" + u.username;
+  } catch(e) { say("Search error: " + e.message); }
+};
+
+$("publish").onclick = async () => {
+  if (!currentUser || !profile?.username) { say("Save your username before posting."); return; }
+  const text = $("postText").value.trim();
+  if (!text) { say("Write something first."); return; }
+  try {
+    await db.collection("posts").add({uid:currentUser.uid, username:profile.username, text, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    $("postText").value = ""; say("Post published!");
+  } catch(e) { say("Post error: " + e.message); }
+};
+
+async function toggleLike(postId) {
+  const ref = db.collection("posts").doc(postId).collection("likes").doc(currentUser.uid);
+  try {
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (snap.exists) tx.delete(ref);
+      else tx.set(ref, {uid:currentUser.uid, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    });
+  } catch(e) { say("Like error: " + e.message); }
+}
+async function addComment(postId, inputId) {
+  if (!profile?.username) { say("Save your username before commenting."); return; }
+  const input = $(inputId), text = input.value.trim();
+  if (!text) return;
+  try {
+    await db.collection("posts").doc(postId).collection("comments").add({uid:currentUser.uid, username:profile.username, text:text.slice(0,500), createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    input.value = "";
+  } catch(e) { say("Comment error: " + e.message); }
+}
+function loadFeed() {
+  feedUnsubscribe = db.collection("posts").orderBy("createdAt","desc").limit(50).onSnapshot(snapshot => {
+    const feed = $("feed"); feed.replaceChildren();
+    snapshot.forEach(doc => {
+      const post = doc.data(), card = document.createElement("article"); card.className = "post";
+      const heading = document.createElement("strong"); heading.textContent = "@" + (post.username || "user");
+      const body = document.createElement("p"); body.textContent = post.text || "";
+      const actions = document.createElement("div"); actions.className = "row";
+      const like = document.createElement("button"); like.textContent = "❤️ Like / Unlike"; like.onclick = () => toggleLike(doc.id);
+      const commentsBtn = document.createElement("button"); commentsBtn.textContent = "Show comments"; commentsBtn.className = "secondary";
+      actions.append(like, commentsBtn);
+      const commentInput = document.createElement("input"); commentInput.placeholder = "Write a comment…"; commentInput.id = "comment-" + doc.id;
+      const commentBtn = document.createElement("button"); commentBtn.textContent = "Comment"; commentBtn.onclick = () => addComment(doc.id, commentInput.id);
+      const commentList = document.createElement("div"); commentList.className = "muted";
+      commentsBtn.onclick = async () => {
+        commentList.replaceChildren();
+        try {
+          const comments = await db.collection("posts").doc(doc.id).collection("comments").orderBy("createdAt","asc").limit(30).get();
+          if (comments.empty) { commentList.textContent = "No comments yet."; return; }
+          comments.forEach(c => { const p = document.createElement("p"); p.textContent = "@" + (c.data().username || "user") + ": " + c.data().text; commentList.appendChild(p); });
+        } catch(e) { say("Comments error: " + e.message); }
+      };
+      card.append(heading, body, actions, commentInput, commentBtn, commentList); feed.appendChild(card);
+    });
+    if (snapshot.empty) feed.textContent = "No posts yet. Be the first to post!";
+  }, e => say("Feed error: " + e.message));
+}
+
+// Basic 1-to-1 chat. Messages are stored in Firestore.
+let activeChatId = null, activeChatUser = null, messagesUnsubscribe = null;
+function chatIdFor(a, b) { return [a, b].sort().join("_"); }
+
+$("openChat").onclick = async () => {
+  if (!currentUser || !profile?.u
